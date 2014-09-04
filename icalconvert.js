@@ -24,7 +24,8 @@ var ical = require('ical'),
 		uuid = require('node-uuid'),
 		async = require('async'),
 		RRule = require('rrule').RRule,
-		moment = require('moment');
+		moment = require('moment'),
+		momentz = require('moment-timezone');
 
 var facilityIds = {
 		"TEST":"1e792b6a-4389-4a0c-a74b-4c4519281545",
@@ -59,6 +60,7 @@ var abbr = process.argv[2],
 		facilityId = facilityIds[abbr],
 		calURL = calURLs[abbr],
 		eventList = require(path + eventLists[abbr]),
+		//NEED TO CHANGE timezone if facility is not in Hawaii
 		calFrom = new Date(process.argv[3]+'T00:00:00-10:00'),
 		calTo	= new Date(process.argv[4]+'T23:59:59-10:00');
 
@@ -122,95 +124,115 @@ Process:
 */
 //var data = ical.parseFile('basic.ics');
 ical.fromURL(calURL, {}, function(err, data){
-	var chgEvents = []; // data is a json object - try to find all changed events out of a rrule
-	/*
-	*/
-
-
   _.forEach(data, function(ev) {
 		if (ev.type == 'VEVENT') {
-		// deal with recurring events - ical.js has a bug using rrule.js to parse RRULE - should use original dtstart 
-		// instead of default current date
-		// this version is not handling changed instances of a recurring series, only deleted ones
-		// Double check recurring rules that generate no instance!!!!!
-		if (ev.rrule) {
-			var rule = new RRule({
-				freq: ev.rrule.options.freq,
-				dtstart: new Date(ev.start.getFullYear(),
-													ev.start.getMonth(),
-													ev.start.getDate(),
-													ev.start.getHours(),
-													ev.start.getMinutes(),
-													ev.start.getSeconds()),
-				interval: ev.rrule.options.interval,
-				wkst: ev.rrule.options.wkst,
-				count: ev.rrule.options.count,
-				bysetpos: ev.rrule.options.bysetpos,
-				bymonth: ev.rrule.options.bymonth,
-				bymonthday: ev.rrule.options.bymonthday,
-				byyearday: ev.rrule.options.byyearday,
-				byweekno: ev.rrule.options.byweekno,
-				byweekday: ev.rrule.options.byweekday
-			});
-
-			// set until option only if it exists
-			if (ev.rrule.options.until) {
-				rule.options.until = new Date(ev.rrule.options.until.getFullYear(),
-																			ev.rrule.options.until.getMonth(),
-																			ev.rrule.options.until.getDate(),
-																			ev.start.getHours(),
-																			ev.start.getMinutes(),
-																			ev.start.getSeconds());
-			}
-
-			// Get all individula occurance
-			var repeatDates = rule.all(),
-					exceptionDates = [];
-
-			// If there are expections (individual recur removed), remove them	
-			// Compare using the value of date object	
-			if (ev.exdate) {
-				_.forEach(ev.exdate,function(date){
-					exceptionDates.push(date.valueOf());
+			// deal with recurring events - ical.js has a bug using rrule.js to parse RRULE - should use original dtstart 
+			// instead of default current date
+			// this version is not handling changed instances of a recurring series, only deleted ones
+			// Double check recurring rules that generate no instance!!!!!
+			if (ev.rrule) {
+				var rule = new RRule({
+					freq: ev.rrule.options.freq,
+					dtstart: new Date(ev.start.getFullYear(),
+														ev.start.getMonth(),
+														ev.start.getDate(),
+														ev.start.getHours(),
+														ev.start.getMinutes(),
+														ev.start.getSeconds()),
+					interval: ev.rrule.options.interval,
+					wkst: ev.rrule.options.wkst,
+					count: ev.rrule.options.count,
+					bysetpos: ev.rrule.options.bysetpos,
+					bymonth: ev.rrule.options.bymonth,
+					bymonthday: ev.rrule.options.bymonthday,
+					byyearday: ev.rrule.options.byyearday,
+					byweekno: ev.rrule.options.byweekno,
+					byweekday: ev.rrule.options.byweekday
 				});
-				_.remove(repeatDates, function(date){
-						return _.find(exceptionDates, function(val){
-							return (val == date.valueOf());
-							});
+
+				// set until option only if it exists
+				if (ev.rrule.options.until) {
+					rule.options.until = new Date(ev.rrule.options.until.getFullYear(),
+																				ev.rrule.options.until.getMonth(),
+																				ev.rrule.options.until.getDate(),
+																				ev.rrule.options.until.getHours(),
+																				ev.rrule.options.until.getMinutes(),
+																				ev.rrule.options.until.getSeconds());
+				}
+
+				// Get all individula occurance
+				var repeatDates = rule.all(),
+						exceptionDates = [];
+
+				console.log(repeatDates);
+
+
+				// If there are expections (individual recur removed), remove them	
+				// Compare using the value of date object	
+				if (ev.exdate) {
+					_.forEach(ev.exdate,function(date){
+							exceptionDates.push(date.valueOf());
 						});
-			}
+					_.remove(repeatDates, function(date){
+							return _.find(exceptionDates, function(val){
+								return (val == date.valueOf());
+								});
+							});
+				}
 
+				// Find changed occurence dates 
+				var chgEvents = _.filter(data, function(cev){
+					return ((cev.type === 'VEVENT') && (cev.recurrenceId) && (cev.uid == ev.uid));
+				});
+				
+				//console.log(JSON.stringify(chgEvents, null, "  "));
+				
+				// For each changed event, remove them from the repeat dates - as they have individual VEVENT rec
+				_.forEach(chgEvents, function(cev){
+					var year = cev.recurrenceId.val.substr(0,4),
+							mon = cev.recurrenceId.val.substr(4,2),
+							day = cev.recurrenceId.val.substr(6,2),
+							hour = cev.recurrenceId.val.substr(9,2),
+							min = cev.recurrenceId.val.substr(11,2),
+							sec = cev.recurrenceId.val.substr(13,2),
+							dt = new Date(momentz(new Date(year, mon-1, day, hour, min, sec, 0)).tz(cev.recurrenceId.params[0].slice(5)).format());
+					_.remove(repeatDates, function(date){
+								return (date.valueOf() == dt.valueOf());
+						});
+				});
 
-			if (repeatDates) {
-				_.forEach(repeatDates, function(date){
-					calEventList.push({
-						"facilityId": facilityId,
-						"name": ev.summary,
-						"startTime": moment(new Date(date.getFullYear(),
-																					date.getMonth(),
-																					date.getDate(),
-																					ev.start.getHours(),
-																					ev.start.getMinutes(),
-																					ev.start.getSeconds())).format(),
-						"location": (ev.location === "") ? null : ev.location,
-						"department": (ev.description === "") ? null : ev.description,
-						"id": uuid.v4()
+				// Generate a rec for each recur event for the rrule series
+				if (repeatDates) {
+					_.forEach(repeatDates, function(date){
+						calEventList.push({
+							"facilityId": facilityId,
+							"name": ev.summary,
+							"startTime": moment(new Date(date.getFullYear(),
+																						date.getMonth(),
+																						date.getDate(),
+																						date.getHours(),
+																						date.getMinutes(),
+																						date.getSeconds())).format(),
+							"location": (ev.location === "") ? null : ev.location,
+							"department": (ev.description === "") ? null : ev.description,
+							"id": uuid.v4()
+						});
 					});
+				}
+				console.log(repeatDates);
+
+			}
+			// Generate individual rec for the VEVENT
+			else {
+				calEventList.push({
+					"facilityId": facilityId,
+					"name": ev.summary,
+					"startTime": moment(ev.start).format(),
+					"location": (ev.location === "") ? null : ev.location,
+					"department": (ev.description === "") ? null : ev.description,
+					"id": uuid.v4()
 				});
 			}
-			console.log(repeatDates);
-
-		}
-		else {
-			calEventList.push({
-				"facilityId": facilityId,
-				"name": ev.summary,
-				"startTime": moment(ev.start).format(),
-				"location": (ev.location === "") ? null : ev.location,
-				"department": (ev.description === "") ? null : ev.description,
-				"id": uuid.v4()
-			});
-		}
 		}
 	});
 
